@@ -1,0 +1,328 @@
+"""
+experiments/run_experiments.py
+-------------------------------
+Runs all three experiments from the CS 57200 Final Report and
+generates all figures and a summary CSV.
+
+Experiments
+-----------
+1. Greedy vs A* + MST           — quality and time on one instance
+2. Scaling Analysis             — time vs. problem size (10, 20, 50, 100 customers)
+3. Heuristic Effectiveness      — A* with vs. without MST heuristic
+4. Tabu Search — 30 stochastic runs + full statistical summary
+"""
+
+from __future__ import annotations
+import os
+import sys
+import csv
+import math
+import time
+import logging
+import argparse
+import numpy as np
+
+# allow running from repo root
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from mdvrp import (Problem, greedy_solve, astar_solve, tabu_solve,
+                   validate_solution, print_solution)
+from mdvrp.visualizer import (
+    plot_routes, plot_distance_comparison, plot_scaling,
+    plot_convergence, plot_distribution, plot_radar,
+)
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-7s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+SEEDS_30 = list(range(42, 72))   # 30 fixed seeds for stochastic runs
+BASE_SEED = 42
+
+
+# ── Experiment 1: Greedy vs A* ────────────────────────────────────────────────
+
+def experiment1(output_dir: str) -> dict:
+    """Compare Greedy and A*+MST on a single 20-customer instance."""
+    log.info("Experiment 1: Greedy vs A* + MST")
+    problem = Problem.generate_random(
+        n_customers=20, n_depots=2, capacity=50, seed=BASE_SEED,
+        name="Exp1-baseline"
+    )
+
+    # Greedy
+    g_routes, g_dist, g_time = greedy_solve(problem, seed=BASE_SEED)
+    ok, msg = validate_solution(g_routes, len(problem.customers))
+    assert ok, f"Greedy infeasible: {msg}"
+
+    # A* (uses greedy routes as depot assignment)
+    a_routes, a_dist, a_time, a_nodes = astar_solve(
+        problem, initial_routes=g_routes, max_nodes_per_depot=5000
+    )
+    ok, msg = validate_solution(a_routes, len(problem.customers))
+    assert ok, f"A* infeasible: {msg}"
+
+    improvement = (g_dist - a_dist) / g_dist * 100
+
+    log.info(f"  Greedy  : dist={g_dist:.2f}  time={g_time*1000:.1f}ms")
+    log.info(f"  A*+MST  : dist={a_dist:.2f}  time={a_time*1000:.1f}ms  "
+             f"nodes={a_nodes}  improvement={improvement:.1f}%")
+
+    # save route plots
+    plot_routes(problem, g_routes, title="Greedy Solution",
+                output_path=os.path.join(output_dir, "exp1_greedy_routes.png"))
+    plot_routes(problem, a_routes, title="A* + MST Solution",
+                output_path=os.path.join(output_dir, "exp1_astar_routes.png"))
+
+    return dict(
+        greedy_dist=g_dist, greedy_time_ms=g_time*1000,
+        astar_dist=a_dist,  astar_time_ms=a_time*1000,
+        astar_nodes=a_nodes, improvement_pct=improvement,
+    )
+
+
+# ── Experiment 2: Scaling Analysis ───────────────────────────────────────────
+
+def experiment2(output_dir: str) -> dict:
+    """Measure execution time vs. problem size for Greedy, A*, and Tabu."""
+    log.info("Experiment 2: Scaling Analysis")
+    sizes = [10, 20, 50, 100]
+    times = {"Greedy": [], "A* + MST": [], "Tabu Search": []}
+
+    for n in sizes:
+        problem = Problem.generate_random(
+            n_customers=n, n_depots=2, capacity=n*3, seed=BASE_SEED,
+            name=f"scale-{n}"
+        )
+        # Greedy
+        _, _, gt = greedy_solve(problem, seed=BASE_SEED)
+        # A* — cap nodes tightly to keep demo fast
+        g_routes, _, _ = greedy_solve(problem, seed=BASE_SEED)
+        _, _, at, _ = astar_solve(problem, initial_routes=g_routes,
+                                  max_nodes_per_depot=min(500, 10**n))
+        # Tabu (5 runs for speed in scaling exp)
+        _, _, tt, _ = tabu_solve(problem, initial_routes=g_routes,
+                                 max_iterations=100, seed=BASE_SEED)
+
+        times["Greedy"].append(round(gt * 1000, 1))
+        times["A* + MST"].append(round(at * 1000, 1))
+        times["Tabu Search"].append(round(tt * 1000, 1))
+
+        log.info(f"  n={n:3d}  Greedy={gt*1000:.1f}ms  "
+                 f"A*={at*1000:.1f}ms  Tabu={tt*1000:.1f}ms")
+
+    plot_scaling(
+        sizes, times,
+        title="Figure 2: Scaling Behaviour — Execution Time vs. Problem Size",
+        output_path=os.path.join(output_dir, "exp2_scaling.png"),
+    )
+    return dict(sizes=sizes, times=times)
+
+
+# ── Experiment 3: Heuristic Effectiveness ────────────────────────────────────
+
+def experiment3(output_dir: str, greedy_routes) -> dict:
+    """Compare A* with MST heuristic vs. uninformed A* (h=0)."""
+    log.info("Experiment 3: MST Heuristic Effectiveness")
+    problem = Problem.generate_random(
+        n_customers=15, n_depots=2, capacity=50, seed=BASE_SEED,
+        name="Exp3-heuristic"
+    )
+    g_routes, _, _ = greedy_solve(problem, seed=BASE_SEED)
+
+    # A* with MST
+    routes_mst, dist_mst, time_mst, nodes_mst = astar_solve(
+        problem, initial_routes=g_routes, max_nodes_per_depot=10000
+    )
+
+    # A* without heuristic (monkey-patch mst_cost to return 0)
+    import mdvrp.astar as astar_mod
+    original_mst = astar_mod.mst_cost
+
+    def zero_heuristic(nodes):
+        return 0.0
+
+    astar_mod.mst_cost = zero_heuristic
+    try:
+        routes_noh, dist_noh, time_noh, nodes_noh = astar_solve(
+            problem, initial_routes=g_routes, max_nodes_per_depot=10000
+        )
+    finally:
+        astar_mod.mst_cost = original_mst   # always restore
+
+    improvement = (dist_noh - dist_mst) / dist_noh * 100
+    log.info(f"  A* (no heuristic): dist={dist_noh:.2f}  nodes={nodes_noh}")
+    log.info(f"  A* (MST)         : dist={dist_mst:.2f}  nodes={nodes_mst}  "
+             f"improvement={improvement:.1f}%")
+
+    return dict(
+        dist_no_heuristic=dist_noh, nodes_no_heuristic=nodes_noh,
+        dist_mst=dist_mst,          nodes_mst=nodes_mst,
+        improvement_pct=improvement,
+    )
+
+
+# ── Experiment 4: Tabu Search — 30 runs ──────────────────────────────────────
+
+def experiment4(output_dir: str) -> dict:
+    """Run Tabu Search 30 times and compute full statistics."""
+    log.info("Experiment 4: Tabu Search — 30 stochastic runs")
+
+    greedy_dists = []
+    tabu_dists   = []
+    all_histories = []
+
+    for i, seed in enumerate(SEEDS_30):
+        problem = Problem.generate_random(
+            n_customers=20, n_depots=2, capacity=50, seed=seed,
+            name=f"tabu-run-{i+1}"
+        )
+        g_routes, g_dist, _ = greedy_solve(problem, seed=seed)
+        t_routes, t_dist, _, history = tabu_solve(
+            problem, initial_routes=g_routes,
+            max_iterations=300, tabu_tenure=10,
+            neighbourhood_size=50, seed=seed,
+        )
+        greedy_dists.append(g_dist)
+        tabu_dists.append(t_dist)
+        all_histories.append(history)
+        log.info(f"  Run {i+1:2d} (seed={seed})  Greedy={g_dist:.1f}  "
+                 f"Tabu={t_dist:.1f}  "
+                 f"Δ={100*(g_dist-t_dist)/g_dist:.1f}%")
+
+    # statistics
+    arr  = np.array(tabu_dists)
+    n    = len(arr)
+    mean = arr.mean()
+    std  = arr.std(ddof=1)
+    se   = std / math.sqrt(n)
+    ci_lo = mean - 1.96 * se
+    ci_hi = mean + 1.96 * se
+    g_mean = np.mean(greedy_dists)
+
+    log.info("\n── Statistical Summary ──")
+    log.info(f"  n          : {n}")
+    log.info(f"  Mean       : {mean:.2f}")
+    log.info(f"  Std Dev    : {std:.2f}")
+    log.info(f"  95% CI     : [{ci_lo:.2f}, {ci_hi:.2f}]")
+    log.info(f"  Greedy mean: {g_mean:.2f}")
+    log.info(f"  Improvement: {100*(g_mean-mean)/g_mean:.1f}%")
+
+    # figures
+    plot_convergence(
+        all_histories,
+        title="Figure 3: Tabu Search Convergence — 30 Runs",
+        output_path=os.path.join(output_dir, "exp4_convergence.png"),
+    )
+    plot_distribution(
+        tabu_dists,
+        title="Figure 4: Tabu Search Result Distribution (n=30)",
+        output_path=os.path.join(output_dir, "exp4_distribution.png"),
+    )
+
+    return dict(
+        n=n, mean=mean, std=std, ci_lo=ci_lo, ci_hi=ci_hi,
+        greedy_mean=g_mean,
+        tabu_dists=tabu_dists, greedy_dists=greedy_dists,
+        histories=all_histories,
+    )
+
+
+# ── Summary figures ───────────────────────────────────────────────────────────
+
+def make_summary_figures(exp1: dict, exp4: dict, output_dir: str) -> None:
+    """Generate the consolidated distance comparison and radar charts."""
+    g_mean = exp4["greedy_mean"]
+    a_dist = exp1["astar_dist"]
+    t_mean = exp4["mean"]
+    t_std  = exp4["std"]
+
+    plot_distance_comparison(
+        labels=["Greedy", "A* + MST", "Tabu Search"],
+        means=[g_mean, a_dist, t_mean],
+        stds=[exp4["std"] * 0, 0, t_std],  # only Tabu is stochastic
+        title="Figure 1: Algorithm Distance Comparison (Mean ± Std Dev)",
+        output_path=os.path.join(output_dir, "fig1_distance_comparison.png"),
+    )
+    plot_radar(output_path=os.path.join(output_dir, "fig_radar.png"))
+
+
+# ── CSV export ────────────────────────────────────────────────────────────────
+
+def export_csv(exp1: dict, exp2: dict, exp4: dict, output_dir: str) -> None:
+    """Save key results to CSV for easy inclusion in the report."""
+    path = os.path.join(output_dir, "results_summary.csv")
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        # Table 4.3
+        writer.writerow(["Table 4.3 — Statistical Results"])
+        writer.writerow(["Algorithm", "Avg Distance", "Std Dev",
+                         "95% CI Lower", "95% CI Upper", "Runs (n)"])
+        writer.writerow(["Greedy (deterministic)",
+                         f"{exp4['greedy_mean']:.2f}", "—", "—", "—", 30])
+        writer.writerow(["A* + MST (deterministic)",
+                         f"{exp1['astar_dist']:.2f}", "—", "—", "—", 1])
+        writer.writerow(["Tabu Search (stochastic)",
+                         f"{exp4['mean']:.2f}", f"{exp4['std']:.2f}",
+                         f"{exp4['ci_lo']:.2f}", f"{exp4['ci_hi']:.2f}", 30])
+        writer.writerow([])
+        # Table 4.2 — scaling
+        writer.writerow(["Table 4.2 — Scaling Analysis (ms)"])
+        writer.writerow(["Customers"] + list(exp2["times"].keys()))
+        for i, sz in enumerate(exp2["sizes"]):
+            writer.writerow([sz] + [exp2["times"][k][i]
+                                    for k in exp2["times"]])
+    log.info(f"Results CSV saved → {path}")
+
+
+# ── CLI entry-point ───────────────────────────────────────────────────────────
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run all MDVRP experiments and generate figures."
+    )
+    parser.add_argument(
+        "--output-dir", default="outputs",
+        help="Directory to save figures and CSV (default: outputs/)"
+    )
+    parser.add_argument(
+        "--skip-scaling", action="store_true",
+        help="Skip Experiment 2 (scaling) to save time"
+    )
+    args = parser.parse_args()
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    log.info(f"Output directory: {args.output_dir}")
+
+    t0 = time.perf_counter()
+
+    exp1 = experiment1(args.output_dir)
+    exp2 = {} if args.skip_scaling else experiment2(args.output_dir)
+
+    # dummy greedy routes for exp3
+    problem_dummy = Problem.generate_random(
+        n_customers=15, n_depots=2, capacity=50, seed=BASE_SEED
+    )
+    g_dummy, _, _ = greedy_solve(problem_dummy, seed=BASE_SEED)
+    exp3 = experiment3(args.output_dir, g_dummy)
+
+    exp4 = experiment4(args.output_dir)
+
+    make_summary_figures(exp1, exp4, args.output_dir)
+
+    if exp2:
+        export_csv(exp1, exp2, exp4, args.output_dir)
+
+    elapsed = time.perf_counter() - t0
+    log.info(f"\nAll experiments complete in {elapsed:.1f}s")
+    log.info(f"Outputs saved to: {args.output_dir}/")
+
+
+if __name__ == "__main__":
+    main()
