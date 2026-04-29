@@ -1,0 +1,281 @@
+"""
+mdvrp/tabu.py
+-------------
+Tabu Search for global MDVRP optimisation (Enhancement 2).
+
+Algorithm
+---------
+Starting from an initial solution (typically the A*-optimised routes):
+
+1. Generate a neighbourhood of candidate moves.
+   - Relocate : move one customer from one route to a different position.
+   - Swap     : exchange two customers between different routes.
+
+2. Evaluate each candidate.  Accept the best non-tabu move.
+
+3. Tabu criterion : a move (customer_id, from_depot, to_depot) is
+   forbidden for `tenure` iterations after it was last made.
+
+4. Aspiration criterion : override the tabu status if the candidate
+   achieves a new global best distance.
+
+5. Repeat for `max_iterations` or until no improvement for
+   `no_improve_limit` consecutive iterations.
+
+Complexity
+----------
+  Per iteration : O(neighbourhood_size)
+  Overall       : O(max_iterations * neighbourhood_size)
+"""
+
+from __future__ import annotations
+import random
+import time
+from copy import deepcopy
+from typing import Dict, List, Optional, Tuple
+
+from mdvrp.problem import Customer, Depot, Problem, Route
+from mdvrp.utils   import solution_cost, validate_solution
+
+
+# ── Move representation ───────────────────────────────────────────────────────
+
+class _Move:
+    """Represents a single neighbourhood move.
+
+    Attributes
+    ----------
+    kind : str
+        "relocate" or "swap".
+    c1 : Customer
+        Primary customer being moved.
+    c2 : Customer or None
+        Secondary customer (swap only).
+    from_depot_id : int
+    to_depot_id : int
+    insert_pos : int
+        Position in destination route where c1 is inserted.
+    insert_pos2 : int
+        Position in source route where c2 is inserted (swap only).
+    """
+
+    __slots__ = ("kind", "c1", "c2", "from_depot_id", "to_depot_id",
+                 "insert_pos", "insert_pos2")
+
+    def __init__(self, kind, c1, c2, from_depot_id, to_depot_id,
+                 insert_pos, insert_pos2=0):
+        self.kind         = kind
+        self.c1           = c1
+        self.c2           = c2
+        self.from_depot_id = from_depot_id
+        self.to_depot_id  = to_depot_id
+        self.insert_pos   = insert_pos
+        self.insert_pos2  = insert_pos2
+
+    @property
+    def tabu_key(self) -> tuple:
+        """Hashable key used to record move in the tabu list."""
+        c2_id = self.c2.id if self.c2 else -1
+        return (self.c1.id, c2_id, self.from_depot_id, self.to_depot_id)
+
+
+# ── Core Tabu Search ──────────────────────────────────────────────────────────
+
+def tabu_solve(
+    problem: Problem,
+    initial_routes: Optional[List[Route]] = None,
+    max_iterations: int = 500,
+    tabu_tenure: int = 10,
+    neighbourhood_size: int = 60,
+    no_improve_limit: int = 100,
+    seed: Optional[int] = None,
+) -> Tuple[List[Route], float, float, List[float]]:
+    """Run Tabu Search to optimise MDVRP routes.
+
+    Parameters
+    ----------
+    problem : Problem
+        The MDVRP instance.
+    initial_routes : list of Route or None
+        Starting solution.  If None, a fresh greedy solution is generated.
+    max_iterations : int
+        Hard limit on search iterations.
+    tabu_tenure : int
+        Number of iterations a move remains forbidden.
+    neighbourhood_size : int
+        Number of candidate moves evaluated per iteration.
+    no_improve_limit : int
+        Stop early if no global improvement for this many consecutive iterations.
+    seed : int or None
+        Random seed (neighbourhood sampling is stochastic).
+
+    Returns
+    -------
+    best_routes : list of Route
+        Best solution found.
+    best_dist : float
+        Total distance of the best solution.
+    elapsed : float
+        Wall-clock seconds.
+    history : list of float
+        Best distance recorded after each iteration (for convergence plots).
+    """
+    t_start = time.perf_counter()
+    rng     = random.Random(seed)
+
+    # ── initialise with greedy if no starting solution ────────────────────────
+    if initial_routes is None:
+        from mdvrp.greedy import greedy_solve
+        initial_routes, _, _ = greedy_solve(problem, seed=seed)
+
+    # working copy — routes keyed by list index (supports multi-route per depot)
+    current = {i: r.copy() for i, r in enumerate(initial_routes)}
+    current_dist = _total(current)
+
+    best = {i: r.copy() for i, r in current.items()}
+    best_dist = current_dist
+
+    tabu_list: Dict[tuple, int] = {}   # key → expiry iteration
+    history   = [best_dist]
+    no_improve = 0
+
+    for iteration in range(1, max_iterations + 1):
+
+        # ── generate neighbourhood ────────────────────────────────────────────
+        moves = _generate_moves(current, problem, rng, neighbourhood_size)
+
+        best_move      = None
+        best_move_dist = float("inf")
+        best_candidate = None
+
+        for move in moves:
+            candidate = _apply_move(current, move)
+            if candidate is None:
+                continue   # infeasible move
+            cand_dist = _total(candidate)
+            key       = move.tabu_key
+            is_tabu   = tabu_list.get(key, 0) > iteration
+            aspiration = cand_dist < best_dist   # override tabu
+
+            if (not is_tabu or aspiration) and cand_dist < best_move_dist:
+                best_move      = move
+                best_move_dist = cand_dist
+                best_candidate = candidate
+
+        # ── accept best move ──────────────────────────────────────────────────
+        if best_move is not None:
+            current      = best_candidate
+            current_dist = best_move_dist
+            tabu_list[best_move.tabu_key] = iteration + tabu_tenure
+
+            if current_dist < best_dist:
+                best      = {i: r.copy() for i, r in current.items()}
+                best_dist = current_dist
+                no_improve = 0
+            else:
+                no_improve += 1
+        else:
+            no_improve += 1
+
+        history.append(best_dist)
+
+        # ── early stopping ────────────────────────────────────────────────────
+        if no_improve >= no_improve_limit:
+            break
+
+    elapsed     = time.perf_counter() - t_start
+    best_routes = list(best.values())  # ordered list of all routes
+    return best_routes, best_dist, elapsed, history
+
+
+# ── Neighbourhood generation ──────────────────────────────────────────────────
+
+def _generate_moves(
+    routes: Dict[int, Route],
+    problem: Problem,
+    rng: random.Random,
+    n: int,
+) -> List[_Move]:
+    """Sample up to n neighbourhood moves (relocate + swap)."""
+    moves = []
+    route_keys = list(routes.keys())
+    flat = [(rk, pos, c)
+            for rk, r in routes.items()
+            for pos, c in enumerate(r.customers)]
+
+    if len(flat) < 2:
+        return moves
+
+    for _ in range(n):
+        kind = rng.choice(["relocate", "swap"])
+
+        if kind == "relocate":
+            from_rk, pos1, c1 = rng.choice(flat)
+            to_rk = rng.choice(route_keys)
+            pos2  = rng.randint(0, max(0, len(routes[to_rk].customers)))
+            moves.append(_Move("relocate", c1, None, from_rk, to_rk, pos2))
+
+        else:  # swap
+            if len(flat) < 2:
+                continue
+            idx1, idx2 = rng.sample(range(len(flat)), 2)
+            rk1, p1, c1 = flat[idx1]
+            rk2, p2, c2 = flat[idx2]
+            if rk1 == rk2:
+                continue   # skip intra-route swaps (handled by 2-opt)
+            moves.append(_Move("swap", c1, c2, rk1, rk2, p2, p1))
+
+    return moves
+
+
+# ── Move application ──────────────────────────────────────────────────────────
+
+def _apply_move(
+    routes: Dict[int, Route],
+    move: _Move,
+) -> Optional[Dict[int, Route]]:
+    """Apply a move and return a new routes dict, or None if infeasible."""
+    new_routes = {did: r.copy() for did, r in routes.items()}
+
+    if move.kind == "relocate":
+        src = new_routes[move.from_depot_id]
+        dst = new_routes[move.to_depot_id]
+
+        # remove from source
+        try:
+            src.customers.remove(move.c1)
+        except ValueError:
+            return None
+
+        # insert into destination
+        pos = min(move.insert_pos, len(dst.customers))
+        dst.customers.insert(pos, move.c1)
+
+        # feasibility check
+        if not dst.is_feasible:
+            return None
+
+    elif move.kind == "swap":
+        r1 = new_routes[move.from_depot_id]
+        r2 = new_routes[move.to_depot_id]
+
+        try:
+            i1 = r1.customers.index(move.c1)
+            i2 = r2.customers.index(move.c2)
+        except ValueError:
+            return None
+
+        r1.customers[i1] = move.c2
+        r2.customers[i2] = move.c1
+
+        if not r1.is_feasible or not r2.is_feasible:
+            return None
+
+    return new_routes
+
+
+# ── Helper ────────────────────────────────────────────────────────────────────
+
+def _total(routes: Dict[int, Route]) -> float:
+    """Sum of route distances."""
+    return sum(r.distance for r in routes.values())
