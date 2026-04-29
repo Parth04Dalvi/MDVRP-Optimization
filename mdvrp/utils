@@ -1,0 +1,131 @@
+"""
+mdvrp/utils.py
+--------------
+Shared utility functions: Euclidean distance, Prim's MST, and
+solution-level metrics used across all algorithms.
+"""
+
+from __future__ import annotations
+import math
+from typing import List, Sequence, Tuple
+
+from mdvrp.problem import Customer, Depot, Route
+
+
+# ── Distance helpers ──────────────────────────────────────────────────────────
+
+def euclidean(a, b) -> float:
+    """Euclidean distance between any two objects with .x and .y attributes."""
+    return math.hypot(a.x - b.x, a.y - b.y)
+
+
+def route_distance(depot: Depot, customers: List[Customer]) -> float:
+    """Total travel distance: depot → customers (in order) → depot."""
+    if not customers:
+        return 0.0
+    nodes = [depot] + customers + [depot]
+    return sum(euclidean(nodes[i], nodes[i + 1])
+               for i in range(len(nodes) - 1))
+
+
+# ── MST heuristic (Prim's algorithm) ─────────────────────────────────────────
+
+def mst_cost(nodes: Sequence) -> float:
+    """Compute the Minimum Spanning Tree cost of a set of nodes using Prim's.
+
+    This is used as the admissible heuristic h(n) in A* search: the MST
+    cost of remaining unvisited customers is always ≤ the true optimal
+    completion cost, so it never overestimates (admissible).
+
+    Parameters
+    ----------
+    nodes : sequence
+        Any objects with .x and .y attributes (Customer or Depot instances).
+
+    Returns
+    -------
+    float
+        Total MST edge weight.  Returns 0.0 for fewer than 2 nodes.
+    """
+    n = len(nodes)
+    if n < 2:
+        return 0.0
+
+    in_tree = {0}
+    min_edge = [math.inf] * n
+    min_edge[0] = 0.0
+
+    # initialise distances from node 0
+    for j in range(1, n):
+        min_edge[j] = euclidean(nodes[0], nodes[j])
+
+    total = 0.0
+    for _ in range(n - 1):
+        # pick the cheapest edge that crosses the cut
+        u = min(
+            (j for j in range(n) if j not in in_tree),
+            key=lambda j: min_edge[j],
+        )
+        total += min_edge[u]
+        in_tree.add(u)
+        # update distances
+        for j in range(n):
+            if j not in in_tree:
+                d = euclidean(nodes[u], nodes[j])
+                if d < min_edge[j]:
+                    min_edge[j] = d
+
+    return total
+
+
+# ── Solution metrics ──────────────────────────────────────────────────────────
+
+def solution_cost(routes: List[Route]) -> float:
+    """Total distance across all routes."""
+    return sum(r.distance for r in routes)
+
+
+def count_nodes_expanded(log: list) -> int:
+    """Count total nodes expanded from an A* expansion log."""
+    return len(log)
+
+
+def print_solution(routes: List[Route], label: str = "") -> None:
+    """Pretty-print a solution to stdout."""
+    total = solution_cost(routes)
+    header = f"── {label} ──" if label else "── Solution ──"
+    print(header)
+    for r in routes:
+        ids = [c.id for c in r.customers]
+        print(f"  Depot {r.depot.id}: {ids}  "
+              f"load={r.total_demand}/{r.depot.capacity}  "
+              f"dist={r.distance:.2f}  "
+              f"{'OK' if r.is_feasible else '⚠ INFEASIBLE'}")
+    print(f"  Total distance: {total:.2f}\n")
+
+
+def validate_solution(routes: List[Route], n_customers: int) -> Tuple[bool, str]:
+    """Check feasibility and completeness of a solution.
+
+    Returns
+    -------
+    (bool, str)
+        (True, "OK") if valid, otherwise (False, reason).
+    """
+    served = []
+    for r in routes:
+        if not r.is_feasible:
+            return False, (f"Route for depot {r.depot.id} exceeds capacity "
+                           f"({r.total_demand} > {r.depot.capacity})")
+        served.extend(c.id for c in r.customers)
+
+    if len(served) != n_customers:
+        return False, f"Expected {n_customers} customers, found {len(served)}"
+    if len(set(served)) != n_customers:
+        dups = [x for x in served if served.count(x) > 1]
+        return False, f"Duplicate customers: {set(dups)}"
+    if sorted(served) != list(range(n_customers)):
+        missing = set(range(n_customers)) - set(served)
+        return False, f"Missing customers: {missing}"
+
+    return True, "OK"
