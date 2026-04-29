@@ -1,0 +1,290 @@
+"""
+mdvrp/visualizer.py
+-------------------
+Plotting utilities for MDVRP solutions and experimental results.
+
+All functions save to a specified output directory and return the
+file path so callers can log or embed the image.
+"""
+
+from __future__ import annotations
+import math
+import os
+from typing import List, Optional
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import numpy as np
+
+from mdvrp.problem import Problem, Route
+from mdvrp.utils   import mst_cost
+
+# ── Colour palette ────────────────────────────────────────────────────────────
+PALETTE = ["#3498DB", "#E74C3C", "#2ECC71", "#9B59B6", "#F39C12", "#1ABC9C"]
+DEPOT_COLORS = ["#E67E22", "#8E44AD", "#C0392B", "#2980B9"]
+STYLE = dict(axes_spines_top=False, axes_spines_right=False)
+
+
+# ── Route map ─────────────────────────────────────────────────────────────────
+
+def plot_routes(
+    problem: Problem,
+    routes: List[Route],
+    title: str = "MDVRP Solution",
+    output_path: str = "routes.png",
+) -> str:
+    """Plot depot locations, customer nodes, and routes on a 2-D map.
+
+    Parameters
+    ----------
+    problem : Problem
+    routes  : list of Route
+    title   : str
+    output_path : str   Full path to save the PNG.
+
+    Returns
+    -------
+    str  Path to the saved image.
+    """
+    fig, ax = plt.subplots(figsize=(8, 7))
+    ax.set_facecolor("#F8F9FA")
+    ax.set_title(title, fontsize=12, fontweight="bold", color="#1F2D3D")
+    ax.set_xlabel("X Coordinate", fontsize=10)
+    ax.set_ylabel("Y Coordinate", fontsize=10)
+    ax.grid(True, alpha=0.25, linestyle="--")
+
+    # draw routes
+    for r in routes:
+        color = PALETTE[r.depot.id % len(PALETTE)]
+        if r.customers:
+            pts = [r.depot] + r.customers + [r.depot]
+            xs  = [p.x for p in pts]
+            ys  = [p.y for p in pts]
+            ax.plot(xs, ys, "-", color=color, lw=1.8, alpha=0.65)
+            for i in range(len(pts) - 1):
+                ax.annotate(
+                    "", xy=(pts[i+1].x, pts[i+1].y),
+                    xytext=(pts[i].x, pts[i].y),
+                    arrowprops=dict(arrowstyle="->", color=color,
+                                   lw=1.1, mutation_scale=12, alpha=0.65),
+                )
+
+    # customer nodes
+    for c in problem.customers:
+        ax.scatter(c.x, c.y, s=55, color="#7F8C8D", zorder=5, edgecolors="white", lw=0.5)
+        ax.text(c.x + 1.2, c.y + 1.2, str(c.id), fontsize=6, color="#444")
+
+    # depot nodes
+    for i, d in enumerate(problem.depots):
+        ax.scatter(d.x, d.y, s=200, marker="D",
+                   color=DEPOT_COLORS[i % len(DEPOT_COLORS)],
+                   zorder=6, edgecolors="white", lw=1.5)
+        ax.text(d.x + 1.5, d.y + 1.5, f"D{d.id}", fontsize=9,
+                fontweight="bold", color=DEPOT_COLORS[i % len(DEPOT_COLORS)])
+
+    # legend
+    handles = [mpatches.Patch(color=PALETTE[r.depot.id % len(PALETTE)],
+                               label=f"Depot {r.depot.id} routes")
+               for r in routes]
+    handles.append(plt.Line2D([0], [0], marker="o", color="w",
+                               markerfacecolor="#7F8C8D", ms=7, label="Customer"))
+    ax.legend(handles=handles, fontsize=8.5, loc="lower right")
+
+    _save(fig, output_path)
+    return output_path
+
+
+# ── Comparison bar chart ──────────────────────────────────────────────────────
+
+def plot_distance_comparison(
+    labels: List[str],
+    means: List[float],
+    stds: Optional[List[float]] = None,
+    title: str = "Algorithm Distance Comparison",
+    output_path: str = "distance_comparison.png",
+) -> str:
+    """Bar chart comparing mean distances across algorithms."""
+    colors = ["#4C72B0", "#55A868", "#C44E52", "#8172B2"][:len(labels)]
+    stds   = stds or [0.0] * len(labels)
+    x      = np.arange(len(labels))
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    bars = ax.bar(x, means, width=0.5, color=colors, zorder=3,
+                  yerr=stds, capsize=7,
+                  error_kw={"linewidth": 2, "ecolor": "#333333"})
+
+    for bar, val, std in zip(bars, means, stds):
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                val + std + max(means) * 0.02,
+                f"{val:.1f}", ha="center", va="bottom",
+                fontsize=11, fontweight="bold", color="#222")
+
+    ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=12)
+    ax.set_ylabel("Average Total Route Distance", fontsize=11)
+    ax.set_ylim(0, max(m + s for m, s in zip(means, stds)) * 1.25)
+    ax.set_title(title, fontsize=12, fontweight="bold", color="#1F2D3D")
+    ax.grid(True, axis="y", alpha=0.3, linestyle="--")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    _save(fig, output_path)
+    return output_path
+
+
+# ── Scaling line chart ────────────────────────────────────────────────────────
+
+def plot_scaling(
+    sizes: List[int],
+    times_dict: dict,
+    title: str = "Scaling Behaviour",
+    output_path: str = "scaling.png",
+) -> str:
+    """Line chart of execution time vs. problem size for multiple algorithms."""
+    color_map = {"Greedy": "#4C72B0", "A* + MST": "#55A868", "Tabu Search": "#C44E52"}
+    marker_map = {"Greedy": "o", "A* + MST": "s", "Tabu Search": "^"}
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+
+    for ax, log_scale in zip(axes, [False, True]):
+        for label, times in times_dict.items():
+            c = color_map.get(label, "#888")
+            m = marker_map.get(label, "o")
+            ax.plot(sizes, times, marker=m, color=c, lw=2.5, ms=8, label=label)
+        ax.set_xlabel("Number of Customers", fontsize=11)
+        ax.set_ylabel("Execution Time (ms)" +
+                      (" — log scale" if log_scale else ""), fontsize=10)
+        ax.set_title("(b) Log Scale" if log_scale else "(a) Linear Scale",
+                     fontsize=11, fontweight="bold")
+        ax.legend(fontsize=10)
+        ax.set_xticks(sizes)
+        ax.grid(True, alpha=0.3, linestyle="--")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        if log_scale:
+            ax.set_yscale("log")
+
+    fig.suptitle(title, fontsize=13, fontweight="bold", color="#1F2D3D", y=1.01)
+    plt.tight_layout()
+    _save(fig, output_path)
+    return output_path
+
+
+# ── Tabu convergence ──────────────────────────────────────────────────────────
+
+def plot_convergence(
+    histories: List[List[float]],
+    title: str = "Tabu Search Convergence",
+    output_path: str = "convergence.png",
+) -> str:
+    """Plot best-distance over iterations for multiple Tabu runs."""
+    max_len = max(len(h) for h in histories)
+    padded  = np.array([h + [h[-1]] * (max_len - len(h)) for h in histories])
+    mn      = padded.mean(axis=0)
+    sd      = padded.std(axis=0)
+    iters   = np.arange(max_len)
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for h in histories:
+        ax.plot(h, alpha=0.12, lw=0.8, color="#C44E52")
+    ax.plot(iters, mn, color="#C44E52", lw=2.5, label=f"Mean (n={len(histories)})")
+    ax.fill_between(iters, mn - sd, mn + sd,
+                    alpha=0.2, color="#C44E52", label="±1 Std Dev")
+
+    # mark convergence
+    diffs = np.abs(np.diff(mn))
+    conv_iter = next((i for i, d in enumerate(diffs) if d < 0.5), len(mn) - 1)
+    ax.axvline(conv_iter, color="#888", ls=":", lw=1.5)
+    ax.text(conv_iter + 2, mn[-1] * 1.05, f"Converges ~iter {conv_iter}",
+            fontsize=9, color="#555")
+
+    ax.set_xlabel("Iteration", fontsize=12)
+    ax.set_ylabel("Best Route Distance", fontsize=12)
+    ax.set_title(title, fontsize=12, fontweight="bold", color="#1F2D3D")
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3, linestyle="--")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.tight_layout()
+    _save(fig, output_path)
+    return output_path
+
+
+# ── Result distribution histogram ────────────────────────────────────────────
+
+def plot_distribution(
+    results: List[float],
+    title: str = "Result Distribution",
+    output_path: str = "distribution.png",
+) -> str:
+    """Histogram of Tabu Search final distances across multiple runs."""
+    arr  = np.array(results)
+    mean = arr.mean()
+    std  = arr.std(ddof=1)
+    n    = len(arr)
+    ci_lo = mean - 1.96 * std / math.sqrt(n)
+    ci_hi = mean + 1.96 * std / math.sqrt(n)
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    ax.hist(arr, bins=10, color="#C44E52", edgecolor="white", lw=1.2, alpha=0.85)
+    ax.axvline(mean,  color="#1F2D3D", ls="--", lw=2,   label=f"Mean = {mean:.1f}")
+    ax.axvline(mean - std, color="#888", ls=":", lw=1.5, label=f"±1 Std ({std:.1f})")
+    ax.axvline(mean + std, color="#888", ls=":", lw=1.5)
+    ax.axvspan(ci_lo, ci_hi, alpha=0.15, color="#1F2D3D",
+               label=f"95% CI [{ci_lo:.1f}, {ci_hi:.1f}]")
+
+    ax.set_xlabel("Final Route Distance", fontsize=12)
+    ax.set_ylabel("Frequency", fontsize=12)
+    ax.set_title(title, fontsize=12, fontweight="bold", color="#1F2D3D")
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3, linestyle="--")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.tight_layout()
+    _save(fig, output_path)
+    return output_path
+
+
+# ── Radar chart ───────────────────────────────────────────────────────────────
+
+def plot_radar(output_path: str = "radar.png") -> str:
+    """Trade-off radar chart for Greedy, A*+MST, and Tabu Search."""
+    categories = ["Speed", "Accuracy", "Scalability", "Memory\nEfficiency", "Stability"]
+    scores = {
+        "Greedy":      [5, 2, 5, 5, 4],
+        "A* + MST":    [3, 4, 2, 2, 5],
+        "Tabu Search": [2, 5, 3, 4, 3],
+    }
+    colors = ["#4C72B0", "#55A868", "#C44E52"]
+    N = len(categories)
+    angles = [n / N * 2 * math.pi for n in range(N)] + [0]
+
+    fig, ax = plt.subplots(figsize=(7, 6), subplot_kw=dict(polar=True))
+    ax.set_facecolor("#F8F9FA")
+
+    for (name, vals), color in zip(scores.items(), colors):
+        v = vals + [vals[0]]
+        ax.plot(angles, v, "o-", lw=2.2, color=color, label=name)
+        ax.fill(angles, v, alpha=0.1, color=color)
+
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(categories, size=11)
+    ax.set_ylim(0, 5.5)
+    ax.set_yticks([1, 2, 3, 4, 5])
+    ax.set_yticklabels(["1", "2", "3", "4", "5"], size=8, color="grey")
+    ax.grid(color="grey", linestyle="--", linewidth=0.5, alpha=0.5)
+    ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.15), fontsize=11)
+    ax.set_title("Algorithm Trade-off Radar\n(5 = best performance)",
+                 fontsize=12, fontweight="bold", color="#1F2D3D", pad=20)
+    plt.tight_layout()
+    _save(fig, output_path)
+    return output_path
+
+
+# ── Helper ────────────────────────────────────────────────────────────────────
+
+def _save(fig, path: str) -> None:
+    os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
