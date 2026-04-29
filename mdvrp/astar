@@ -1,0 +1,262 @@
+"""
+mdvrp/astar.py
+--------------
+A* Search with admissible MST heuristic for per-route optimisation.
+
+Design note
+-----------
+True global A* on the full MDVRP state space is computationally
+intractable (the state space grows factorially).  Instead, this module
+applies A* independently to each depot's route — treating the per-depot
+sub-problem as a TSP-like sequencing task — using the MST cost of
+unvisited customers as the admissible heuristic h(n).
+
+For each depot:
+  - State   : (current_node, frozenset_of_unvisited_customers)
+  - g(n)    : distance travelled so far
+  - h(n)    : MST cost of remaining unvisited customers (admissible lower bound)
+  - f(n)    : g(n) + h(n)
+
+Properties
+----------
+  Admissible : h(n) ≤ true remaining cost  (MST ≤ optimal tour completion)
+  Consistent : satisfies triangle inequality → no re-expansion needed
+
+Time complexity : O(2^k * k^2) per depot, where k = customers per depot
+Space complexity: O(2^k * k)
+"""
+
+from __future__ import annotations
+import heapq
+import time
+from typing import Dict, FrozenSet, List, Optional, Tuple
+
+from mdvrp.problem import Customer, Depot, Problem, Route
+from mdvrp.utils   import mst_cost, solution_cost
+
+
+# ── State ─────────────────────────────────────────────────────────────────────
+
+class _State:
+    """A single node in the A* search tree.
+
+    Attributes
+    ----------
+    current : Customer or Depot
+        The node just visited.
+    unvisited : frozenset of int
+        Customer IDs not yet visited.
+    g : float
+        Actual cost (distance) from the start depot to this state.
+    h : float
+        Heuristic estimate of remaining cost (MST of unvisited).
+    path : list of Customer
+        Sequence of customers visited so far.
+    """
+
+    __slots__ = ("current", "unvisited", "g", "h", "path")
+
+    def __init__(
+        self,
+        current,
+        unvisited: FrozenSet[int],
+        g: float,
+        h: float,
+        path: List[Customer],
+    ) -> None:
+        self.current   = current
+        self.unvisited = unvisited
+        self.g         = g
+        self.h         = h
+        self.path      = path
+
+    @property
+    def f(self) -> float:
+        return self.g + self.h
+
+    # heapq needs comparison; break ties by g (prefer shorter actual paths)
+    def __lt__(self, other: "_State") -> bool:
+        return (self.f, -self.g) < (other.f, -other.g)
+
+    def __repr__(self) -> str:
+        return (f"State(node={getattr(self.current,'id','depot')}, "
+                f"unvisited={len(self.unvisited)}, f={self.f:.2f})")
+
+
+# ── A* per-depot solver ───────────────────────────────────────────────────────
+
+def _astar_route(
+    depot: Depot,
+    assigned_customers: List[Customer],
+    customer_map: Dict[int, Customer],
+    max_nodes: int = 50_000,
+) -> Tuple[List[Customer], float, int]:
+    """Run A* to find the shortest route for one depot.
+
+    Parameters
+    ----------
+    depot : Depot
+        Starting (and ending) depot.
+    assigned_customers : list of Customer
+        Customers that must be visited on this route.
+    customer_map : dict[int, Customer]
+        Global customer id → Customer object lookup.
+    max_nodes : int
+        Safety limit on nodes expanded to avoid memory explosion on large instances.
+        When exceeded, the best solution found so far is returned.
+
+    Returns
+    -------
+    best_path : list of Customer
+        Optimised visit order.
+    best_dist : float
+        Total route distance (depot → path → depot).
+    nodes_expanded : int
+        Number of states popped from the open list.
+    """
+    if not assigned_customers:
+        return [], 0.0, 0
+
+    # index customers for fast MST computation
+    cust_list   = assigned_customers
+    cust_by_id  = {c.id: c for c in cust_list}
+    all_ids     = frozenset(c.id for c in cust_list)
+
+    # initial heuristic: MST of all customers
+    h0 = mst_cost(cust_list)
+
+    # initialise open list
+    start = _State(
+        current   = depot,
+        unvisited = all_ids,
+        g         = 0.0,
+        h         = h0,
+        path      = [],
+    )
+    open_list = [start]
+    heapq.heapify(open_list)
+
+    # closed set: (current_id, unvisited_frozenset)
+    closed: set = set()
+    nodes_expanded = 0
+
+    best_path: List[Customer] = list(cust_list)   # fallback: original order
+    best_dist: float          = _route_dist(depot, best_path)
+
+    while open_list:
+        state = heapq.heappop(open_list)
+        nodes_expanded += 1
+
+        key = (getattr(state.current, "id", -1), state.unvisited)
+        if key in closed:
+            continue
+        closed.add(key)
+
+        # ── goal check ────────────────────────────────────────────────────────
+        if not state.unvisited:
+            # complete route: add return to depot
+            finish_dist = state.g + state.current.distance_to(depot)
+            if finish_dist < best_dist:
+                best_dist = finish_dist
+                best_path = state.path[:]
+            # A* guarantees optimality for the first complete path popped
+            break
+
+        # ── safety cutoff ─────────────────────────────────────────────────────
+        if nodes_expanded >= max_nodes:
+            break
+
+        # ── expand neighbours ─────────────────────────────────────────────────
+        for cid in state.unvisited:
+            next_cust    = cust_by_id[cid]
+            new_g        = state.g + state.current.distance_to(next_cust)
+            new_unvisited = state.unvisited - {cid}
+
+            # compute h for remaining customers
+            remaining = [cust_by_id[i] for i in new_unvisited]
+            new_h     = mst_cost(remaining) if remaining else 0.0
+
+            new_state = _State(
+                current   = next_cust,
+                unvisited = new_unvisited,
+                g         = new_g,
+                h         = new_h,
+                path      = state.path + [next_cust],
+            )
+            heapq.heappush(open_list, new_state)
+
+    return best_path, best_dist, nodes_expanded
+
+
+def _route_dist(depot: Depot, customers: List[Customer]) -> float:
+    """Total distance depot → customers (in order) → depot."""
+    if not customers:
+        return 0.0
+    nodes = [depot] + customers + [depot]
+    return sum(nodes[i].distance_to(nodes[i + 1])
+               for i in range(len(nodes) - 1))
+
+
+# ── Public solver ─────────────────────────────────────────────────────────────
+
+def astar_solve(
+    problem: Problem,
+    initial_routes: Optional[List[Route]] = None,
+    max_nodes_per_depot: int = 50_000,
+) -> Tuple[List[Route], float, float, int]:
+    """Optimise a MDVRP solution using per-depot A* with MST heuristic.
+
+    Parameters
+    ----------
+    problem : Problem
+        The MDVRP instance.
+    initial_routes : list of Route or None
+        Starting assignment of customers to depots.  If None, customers
+        are distributed round-robin (for standalone testing only; in
+        practice, pass the greedy solution).
+    max_nodes_per_depot : int
+        Node expansion limit per depot (prevents memory explosion).
+
+    Returns
+    -------
+    routes : list of Route
+        A* optimised routes (one per depot).
+    total_dist : float
+        Sum of route distances.
+    elapsed : float
+        Wall-clock time in seconds.
+    total_nodes : int
+        Total nodes expanded across all depots.
+    """
+    t_start = time.perf_counter()
+
+    # ── fall back to round-robin if no initial routes given ───────────────────
+    if initial_routes is None:
+        routes_map: Dict[int, List[Customer]] = {d.id: [] for d in problem.depots}
+        for i, c in enumerate(problem.customers):
+            routes_map[i % len(problem.depots)].append(c)
+    else:
+        routes_map = {d.id: [] for d in problem.depots}
+        for r in initial_routes:
+            routes_map[r.depot.id].extend(r.customers)
+
+    customer_map = {c.id: c for c in problem.customers}
+    optimised_routes: List[Route] = []
+    total_nodes = 0
+
+    # Run A* per original route (preserving multi-route structure from Greedy)
+    for original_route in (initial_routes if initial_routes else
+                           [Route(depot=d, customers=routes_map[d.id])
+                            for d in problem.depots]):
+        assigned = original_route.customers
+        best_path, _, nodes = _astar_route(
+            original_route.depot, assigned, customer_map,
+            max_nodes=max_nodes_per_depot
+        )
+        total_nodes += nodes
+        r = Route(depot=original_route.depot, customers=best_path)
+        optimised_routes.append(r)
+
+    elapsed    = time.perf_counter() - t_start
+    total_dist = solution_cost(optimised_routes)
+    return optimised_routes, total_dist, elapsed, total_nodes
