@@ -176,36 +176,36 @@ Results are saved to `outputs/results_summary.csv`.
 
 ## References 
 1. S. Russell and P. Norvig, Artificial Intelligence: A Modern Approach, 4th ed. 
-Hoboken, NJ, USA: Pearson, 2020.  \\
+Hoboken, NJ, USA: Pearson, 2020
 2. G. Laporte, “The vehicle routing problem: An overview of exact and approximate 
 algorithms,” European Journal of Operational Research, vol. 59, no. 3, pp. 345–358, 
-1992.  
+1992 
 3. J. F. Cordeau, M. Gendreau, and G. Laporte, “A tabu search heuristic for the static 
-multi-depot vehicle routing problem,” Networks, vol. 30, no. 2, pp. 105–119, 1997.  
-4. F. Glover and M. Laguna, Tabu Search. Boston, MA, USA: Springer, 1997.  
+multi-depot vehicle routing problem,” Networks, vol. 30, no. 2, pp. 105–119, 1997  
+4. F. Glover and M. Laguna, Tabu Search. Boston, MA, USA: Springer, 1997  
 5. N. Christofides, “Worst-case analysis of a new heuristic for the travelling salesman 
-problem,” Carnegie Mellon University, Pittsburgh, PA, USA, Tech. Rep., 1976.  
+problem,” Carnegie Mellon University, Pittsburgh, PA, USA, Tech. Rep., 1976  
 6. E. W. Dijkstra, “A note on two problems in connexion with graphs,” Numerische 
-Mathematik, vol. 1, pp. 269–271, 1959.  
+Mathematik, vol. 1, pp. 269–271, 1959  
 7. R. C. Prim, “Shortest connection networks and some generalizations,” Bell System 
-Technical Journal, vol. 36, no. 6, pp. 1389–1401, 1957.  
+Technical Journal, vol. 36, no. 6, pp. 1389–1401, 1957  
 8. P. E. Hart, N. J. Nilsson, and B. Raphael, “A formal basis for the heuristic 
 determination of minimum cost paths,” IEEE Transactions on Systems Science and 
-Cybernetics, vol. 4, no. 2, pp. 100–107, 1968.  
+Cybernetics, vol. 4, no. 2, pp. 100–107, 1968  
 9. P. Toth and D. Vigo, Vehicle Routing: Problems, Methods, and Applications, 2nd ed. 
-Philadelphia, PA, USA: SIAM, 2014.  
+Philadelphia, PA, USA: SIAM, 2014  
 10. Google Developers, “Vehicle Routing Problem,” Google OR-Tools Documentation. 
 [Online]. Available: https://developers.google.com/optimization/routing 
 11. O. Bräysy and M. Gendreau, “Vehicle routing problem with time windows, Part I: 
 Route construction and local search algorithms,” Transportation Science, vol. 39, 
-no. 1, pp. 104–118, 2005.  
+no. 1, pp. 104–118, 2005  
 12. T. Vidal, T. G. Crainic, M. Gendreau, and C. Prins, “A hybrid genetic algorithm for 
 multidepot and periodic vehicle routing problems,” Operations Research, vol. 60, 
-no. 3, pp. 611–624, 2012.  
+no. 3, pp. 611–624, 2012  
 13. S. Salhi and R. J. Sari, “A multi-level composite heuristic for the multi-depot vehicle 
 routing problem,” Methodology and Computing in Applied Probability, vol. 9, no. 1, 
-pp. 95–106, 2007.  
+pp. 95–106, 2007  
 14. D. Pisinger and S. Ropke, “A general heuristic for vehicle routing problems,” 
-Computers & Operations Research, vol. 34, no. 8, pp. 2403–2435, 2007.  
+Computers & Operations Research, vol. 34, no. 8, pp. 2403–2435, 2007 
 15. M. Dorigo and T. Stützle, Ant Colony Optimization. Cambridge, MA, USA: MIT Press, 
 2004.
