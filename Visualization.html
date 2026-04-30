@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MDVRP — Live Route Optimizer</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0e1a;--surface:#111827;--border:#1e2d45;--text:#e8edf5;--muted:#5a7090;--teal:#00d4b4;--amber:#f5a623;--green:#39d353;--blue:#4d9fff;--purple:#a78bfa;--red:#ff4d6d}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg)}
+body{color:var(--text);font-family:'Syne',sans-serif;display:flex;flex-direction:column}
+
+header{display:flex;align-items:center;gap:16px;padding:10px 20px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+.logo{font-size:15px;font-weight:800;letter-spacing:.08em;color:var(--teal)}
+.logo span{color:var(--text)}
+.hstats{display:flex;gap:20px;margin-left:auto;align-items:center}
+.stat{display:flex;flex-direction:column;align-items:flex-end}
+.stat-val{font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--teal)}
+.stat-lbl{font-size:9px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.spdrow{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)}
+.spdrow input{width:70px;accent-color:var(--teal)}
+.btn{padding:6px 14px;border-radius:5px;border:1px solid var(--teal);background:transparent;color:var(--teal);font-family:'Space Mono',monospace;font-size:11px;cursor:pointer;transition:.15s all}
+.btn:hover,.btn.on{background:var(--teal);color:var(--bg)}
+
+.main{display:flex;flex:1;overflow:hidden;min-height:0}
+.cw{flex:1;overflow:hidden;position:relative}
+#cv{display:block}
+
+.sidebar{width:250px;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+.ss{padding:12px 14px;border-bottom:1px solid var(--border)}
+.st{font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+
+.rc{padding:8px 9px;border-radius:6px;border:1px solid var(--border);margin-bottom:6px;border-left-width:3px}
+.rc-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.rc-name{font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px}
+.rc-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.rc-dist{font-family:'Space Mono',monospace;font-size:10px;color:var(--muted)}
+.rc-bar-bg{height:3px;background:var(--border);border-radius:2px;margin-bottom:3px;overflow:hidden}
+.rc-bar-fill{height:100%;border-radius:2px;transition:width .1s linear}
+.rc-stops{font-size:9px;color:var(--muted)}
+
+.logwrap{flex:1;overflow-y:auto;padding:8px 14px}
+.logwrap::-webkit-scrollbar{width:3px}
+.logwrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.le{display:flex;gap:7px;align-items:flex-start;padding:4px 0;border-bottom:1px solid var(--border);font-size:10px;animation:fi .25s ease}
+@keyframes fi{from{opacity:0;transform:translateX(-5px)}to{opacity:1}}
+.lts{font-family:'Space Mono',monospace;color:var(--muted);flex-shrink:0;font-size:9px;margin-top:1px}
+.ld{width:6px;height:6px;border-radius:50%;flex-shrink:0;margin-top:2px}
+.lt{color:var(--text);line-height:1.4}
+.lt b{font-weight:600}
+
+.leg{padding:8px 14px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px}
+.li{display:flex;align-items:center;gap:4px;font-size:9px;color:var(--muted)}
+
+.fbar{padding:7px 20px;background:var(--surface);border-top:1px solid var(--border);display:flex;gap:12px;align-items:center;flex-shrink:0}
+.ab{font-size:9px;font-family:'Space Mono',monospace;padding:2px 7px;border-radius:3px;border:1px solid var(--border);color:var(--muted)}
+.ab.on{border-color:var(--teal);color:var(--teal);background:rgba(0,212,180,.07)}
+.gb{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.gbf{height:100%;background:linear-gradient(90deg,var(--teal),var(--blue));border-radius:2px;transition:width .1s linear}
+.gpct{font-family:'Space Mono',monospace;font-size:11px;color:var(--teal);min-width:34px;text-align:right}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">MDVRP <span>Live Optimizer</span></div>
+  <div class="hstats">
+    <div class="stat"><span class="stat-val" id="hDist">0</span><span class="stat-lbl">Total Distance</span></div>
+    <div class="stat"><span class="stat-val" id="hDel">0/20</span><span class="stat-lbl">Delivered</span></div>
+    <div class="stat"><span class="stat-val" id="hTrucks">—</span><span class="stat-lbl">Trucks</span></div>
+    <div class="spdrow">
+      <span>Speed</span>
+      <input type="range" id="spd" min="0.5" max="6" step="0.5" value="2">
+      <span id="spdLbl">2×</span>
+    </div>
+    <button class="btn on" id="btnPlay" onclick="togglePlay()">⏸ Pause</button>
+    <button class="btn" onclick="resetSim()">↺ Reset</button>
+  </div>
+</header>
+
+<div class="main">
+  <div class="cw" id="cw">
+    <canvas id="cv"></canvas>
+  </div>
+  <div class="sidebar">
+    <div class="ss"><div class="st">Active Routes</div><div id="rcards"></div></div>
+    <div class="ss" style="flex:1;display:flex;flex-direction:column;overflow:hidden;border-bottom:none">
+      <div class="st">Delivery Log</div>
+      <div class="logwrap" id="logEl"></div>
+    </div>
+    <div class="leg">
+      <div class="li"><svg width="10" height="10"><polygon points="5,0 10,10 0,10" fill="#f5a623"/></svg>Depot A</div>
+      <div class="li"><svg width="10" height="10"><polygon points="5,0 10,10 0,10" fill="#a78bfa"/></svg>Depot B</div>
+      <div class="li"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#5a7090"/></svg>Unvisited</div>
+      <div class="li"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#39d353"/></svg>Delivered</div>
+    </div>
+  </div>
+</div>
+
+<div class="fbar">
+  <span class="ab">GREEDY INIT</span>
+  <span class="ab on">A* + MST</span>
+  <span class="ab on">TABU SEARCH</span>
+  <div class="gb"><div class="gbf" id="gbFill" style="width:0%"></div></div>
+  <span class="gpct" id="gbPct">0%</span>
+</div>
+
+<script>
+// ── Seeded random ──────────────────────────────────────────────────────────────
+let _s=42;
+function rng(){_s=(_s^(_s<<13))^(_s>>17)^(_s<<5);return(_s>>>0)/4294967296;}
+function resetRng(){_s=42;}
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+let cv,ctx,W,H;
+function setupCanvas(){
+  cv=document.getElementById('cv');
+  ctx=cv.getContext('2d');
+  const cw=document.getElementById('cw');
+  W=cw.clientWidth||800;
+  H=cw.clientHeight||500;
+  cv.width=W;
+  cv.height=H;
+  cv.style.width=W+'px';
+  cv.style.height=H+'px';
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+const d2=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+
+// Cross-browser rounded rect (no roundRect API needed)
+function rrect(x,y,w,h,r){
+  r=Math.min(r,w/2,h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.lineTo(x+w-r,y);
+  ctx.arcTo(x+w,y,x+w,y+r,r);
+  ctx.lineTo(x+w,y+h-r);
+  ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h);
+  ctx.arcTo(x,y+h,x,y+h-r,r);
+  ctx.lineTo(x,y+r);
+  ctx.arcTo(x,y,x+r,y,r);
+  ctx.closePath();
+}
+
+// ── Problem generation ────────────────────────────────────────────────────────
+let problem,routes,trucks;
+let totalDel=0,frame=0;
+let playing=true,speed=2;
+let animId=null;
+
+const RCOLORS=[['#00d4b4','#39d353'],['#a78bfa','#ff4d6d']];
+
+function genProblem(){
+  const mg=80;
+  const iw=W-2*mg, ih=H-2*mg;
+  return {
+    depots:[
+      {id:0,x:mg+rng()*iw*0.3+20,        y:mg+rng()*ih*0.3+20,        color:'#f5a623',label:'A',cap:150},
+      {id:1,x:W-mg-rng()*iw*0.3-20,      y:H-mg-rng()*ih*0.3-20,      color:'#a78bfa',label:'B',cap:150},
+    ],
+    customers:Array.from({length:20},(_,i)=>({
+      id:i,
+      x:mg+rng()*iw,
+      y:mg+rng()*ih,
+      demand:5+Math.floor(rng()*15),
+      visited:false,
+    })),
+  };
+}
+
+function buildRoutes(depots,customers){
+  const unvis=[...customers];
+  const routes=[];
+  depots.forEach((dep,di)=>{
+    for(let v=0;v<2;v++){
+      if(!unvis.length)return;
+      const stops=[];let load=0,cur=dep;
+      while(unvis.length){
+        let best=null,bestD=1e9,bi=-1;
+        unvis.forEach((c,i)=>{
+          if(load+c.demand<=dep.cap){const dd=d2(cur,c);if(dd<bestD){bestD=dd;best=c;bi=i;}}
+        });
+        if(!best)break;
+        stops.push(best);load+=best.demand;cur=best;unvis.splice(bi,1);
+      }
+      if(!stops.length)return;
+      routes.push({depot:dep,stops,color:RCOLORS[di][v%2],id:`${dep.label}${v+1}`,load});
+    }
+  });
+  return routes;
+}
+
+function twoOpt(depot,stops){
+  const s=[...stops];
+  let imp=true;
+  while(imp){imp=false;
+    for(let i=0;i<s.length-1;i++){
+      for(let j=i+2;j<s.length;j++){
+        const a=i===0?depot:s[i-1],b=s[i],c=s[j],dd=j===s.length-1?depot:s[j+1];
+        if(d2(a,b)+d2(c,dd)>d2(a,c)+d2(b,dd)+0.5){
+          s.splice(i,j-i+1,...s.slice(i,j+1).reverse());imp=true;
+        }
+      }
+    }
+  }
+  return s;
+}
+
+function makeWPs(route){
+  const opt=twoOpt(route.depot,route.stops);
+  return [route.depot,...opt,route.depot];
+}
+function wpsLen(wps){let s=0;for(let i=0;i<wps.length-1;i++)s+=d2(wps[i],wps[i+1]);return s;}
+
+// ── Truck ─────────────────────────────────────────────────────────────────────
+class Truck{
+  constructor(route,wps,wait){
+    Object.assign(this,{route,wps,wait,segIdx:0,segT:0,done:false,
+      x:wps[0].x,y:wps[0].y,angle:0,trail:[],
+      totalDist:wpsLen(wps),travelled:0,delivered:new Set()});
+  }
+  prog(){return Math.min(this.travelled/Math.max(this.totalDist,1),1);}
+  advance(spd){
+    if(this.wait>0){this.wait--;return;}
+    if(this.done)return;
+    const seg=this.wps[this.segIdx],nxt=this.wps[this.segIdx+1];
+    if(!nxt){this.done=true;return;}
+    const len=d2(seg,nxt);
+    if(len<0.001){this.segIdx++;return;}
+    this.segT+=spd/len;this.travelled+=spd;
+    const t=Math.min(this.segT,1);
+    this.x=seg.x+(nxt.x-seg.x)*t;
+    this.y=seg.y+(nxt.y-seg.y)*t;
+    this.angle=Math.atan2(nxt.y-seg.y,nxt.x-seg.x);
+    this.trail.push({x:this.x,y:this.y});
+    if(this.trail.length>80)this.trail.shift();
+    if(this.segT>=1){
+      this.segT=0;this.segIdx++;
+      this.route.stops.forEach(c=>{
+        if(!this.delivered.has(c.id)&&Math.abs(c.x-nxt.x)<2&&Math.abs(c.y-nxt.y)<2){
+          c.visited=true;this.delivered.add(c.id);totalDel++;
+          addLog(`Truck <b>${this.route.id}</b> → Customer #${c.id} (${c.demand} units)`,this.route.color);
+          updateHeader();
+        }
+      });
+      if(this.segIdx>=this.wps.length-1){
+        this.done=true;
+        addLog(`✓ Truck <b>${this.route.id}</b> back at Depot ${this.route.depot.label}`,this.route.color);
+      }
+    }
+  }
+}
+
+// ── Log & UI ──────────────────────────────────────────────────────────────────
+function addLog(txt,color){
+  const el=document.getElementById('logEl');
+  const now=new Date(),ts=`${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  const div=document.createElement('div');div.className='le';
+  div.innerHTML=`<span class="lts">${ts}</span><span class="ld" style="background:${color}"></span><span class="lt">${txt}</span>`;
+  el.prepend(div);
+  while(el.children.length>50)el.removeChild(el.lastChild);
+}
+function updateHeader(){
+  const tot=trucks?trucks.reduce((s,t)=>s+t.travelled,0):0;
+  document.getElementById('hDist').textContent=Math.round(tot);
+  document.getElementById('hDel').textContent=`${totalDel}/20`;
+}
+function updateCards(){
+  if(!routes)return;
+  const el=document.getElementById('rcards');el.innerHTML='';
+  routes.forEach((r,i)=>{
+    const t=trucks[i];
+    const pct=t?Math.round(t.prog()*100):0;
+    const vis=t?t.delivered.size:0;
+    const div=document.createElement('div');div.className='rc';
+    div.style.borderLeftColor=r.color;
+    div.innerHTML=`<div class="rc-head"><div class="rc-name"><span class="rc-dot" style="background:${r.color}"></span>Truck ${r.id}</div><span class="rc-dist">${r.totalD||0}</span></div><div class="rc-bar-bg"><div class="rc-bar-fill" style="width:${pct}%;background:${r.color}"></div></div><div class="rc-stops">${vis}/${r.stops.length} stops · Depot ${r.depot.label} · Load ${r.load}</div>`;
+    el.appendChild(div);
+  });
+}
+
+// ── Draw helpers ──────────────────────────────────────────────────────────────
+function drawGrid(){
+  ctx.strokeStyle='rgba(30,45,69,0.55)';ctx.lineWidth=0.5;
+  for(let x=0;x<W;x+=55){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<H;y+=55){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+}
+
+function drawPlanned(r,wps){
+  ctx.strokeStyle=r.color+'25';ctx.lineWidth=1.5;ctx.setLineDash([5,5]);
+  ctx.beginPath();wps.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));ctx.stroke();ctx.setLineDash([]);
+}
+
+function drawTravelled(t){
+  if(t.segIdx===0&&t.wait>0)return;
+  const wps=t.wps;
+  ctx.strokeStyle=t.route.color+'80';ctx.lineWidth=2;
+  ctx.beginPath();
+  for(let i=0;i<=Math.min(t.segIdx,wps.length-1);i++)
+    i===0?ctx.moveTo(wps[i].x,wps[i].y):ctx.lineTo(wps[i].x,wps[i].y);
+  ctx.lineTo(t.x,t.y);ctx.stroke();
+}
+
+function drawTrail(t){
+  const tr=t.trail;if(tr.length<2)return;
+  for(let i=1;i<tr.length;i++){
+    const a=i/tr.length;
+    ctx.strokeStyle=t.route.color+Math.floor(a*200).toString(16).padStart(2,'0');
+    ctx.lineWidth=3*a;
+    ctx.beginPath();ctx.moveTo(tr[i-1].x,tr[i-1].y);ctx.lineTo(tr[i].x,tr[i].y);ctx.stroke();
+  }
+}
+
+function drawCustomer(c){
+  const r=7;
+  if(c.visited){
+    const p=(Math.sin(frame*.05)*.5+.5);
+    ctx.strokeStyle=`rgba(57,211,83,${.15+p*.35})`;ctx.lineWidth=1;
+    ctx.beginPath();ctx.arc(c.x,c.y,r+4+p*4,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle='#39d353';ctx.beginPath();ctx.arc(c.x,c.y,r,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#0a0e1a';ctx.lineWidth=1.8;
+    ctx.beginPath();ctx.moveTo(c.x-3,c.y);ctx.lineTo(c.x-0.5,c.y+2.5);ctx.lineTo(c.x+3.5,c.y-2.5);ctx.stroke();
+  }else{
+    ctx.fillStyle='#1a2335';ctx.strokeStyle='#5a7090';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.arc(c.x,c.y,r,0,Math.PI*2);ctx.fill();ctx.stroke();
+    ctx.fillStyle='#7a90a8';ctx.font='bold 8px "Space Mono"';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(c.id,c.x,c.y);ctx.textBaseline='alphabetic';
+  }
+}
+
+function drawDepot(dep){
+  const s=18,p=(Math.sin(frame*.025)*.5+.5);
+  ctx.strokeStyle=dep.color+'30';ctx.lineWidth=1;ctx.setLineDash([3,4]);
+  ctx.beginPath();ctx.arc(dep.x,dep.y,32+p*4,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);
+  // Glow
+  const g=ctx.createRadialGradient(dep.x,dep.y,0,dep.x,dep.y,30);
+  g.addColorStop(0,dep.color+'28');g.addColorStop(1,'transparent');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(dep.x,dep.y,30,0,Math.PI*2);ctx.fill();
+  // Diamond
+  ctx.fillStyle=dep.color;
+  ctx.beginPath();ctx.moveTo(dep.x,dep.y-s);ctx.lineTo(dep.x+s*.65,dep.y);
+  ctx.lineTo(dep.x,dep.y+s);ctx.lineTo(dep.x-s*.65,dep.y);ctx.closePath();ctx.fill();
+  ctx.fillStyle='#0a0e1a';ctx.font='bold 12px Syne';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(dep.label,dep.x,dep.y);ctx.textBaseline='alphabetic';
+  ctx.fillStyle=dep.color;ctx.font='bold 9px "Space Mono"';ctx.textAlign='center';
+  ctx.fillText(`DEPOT ${dep.label}`,dep.x,dep.y+s+14);
+}
+
+function drawTruck(t){
+  if(t.wait>0)return;
+  ctx.save();ctx.translate(t.x,t.y);ctx.rotate(t.angle);
+  // Halo
+  const g=ctx.createRadialGradient(0,0,1,0,0,16);
+  g.addColorStop(0,t.route.color+'45');g.addColorStop(1,'transparent');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,16,0,Math.PI*2);ctx.fill();
+  // Body
+  ctx.fillStyle=t.route.color;rrect(-8,-5,18,10,3);ctx.fill();
+  // Cab
+  ctx.fillStyle='rgba(255,255,255,.18)';rrect(6,-4,5,8,2);ctx.fill();
+  // Wheels
+  ctx.fillStyle='#0a0e1a';
+  [[-3,5],[3,5],[-3,-5],[3,-5]].forEach(([wx,wy])=>{ctx.beginPath();ctx.ellipse(wx,wy,2.2,1.3,0,0,Math.PI*2);ctx.fill();});
+  // Headlight
+  ctx.fillStyle='#fffde7';ctx.beginPath();ctx.arc(10,0,1.5,0,Math.PI*2);ctx.fill();
+  ctx.restore();
+  // Label
+  ctx.save();
+  ctx.fillStyle='rgba(10,14,26,.8)';rrect(t.x-12,t.y-27,24,13,3);ctx.fill();
+  ctx.fillStyle='#fff';ctx.font='bold 8px "Space Mono"';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(t.route.id,t.x,t.y-20);ctx.textBaseline='alphabetic';
+  ctx.restore();
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function render(){
+  // Clear with solid bg (not clearRect alone, which leaves transparent)
+  ctx.fillStyle='#0a0e1a';ctx.fillRect(0,0,W,H);
+  drawGrid();
+  if(!problem)return;
+  routes.forEach((r,i)=>drawPlanned(r,trucks[i].wps));
+  trucks.forEach(t=>drawTravelled(t));
+  trucks.forEach(t=>drawTrail(t));
+  problem.customers.forEach(c=>drawCustomer(c));
+  problem.depots.forEach(d=>drawDepot(d));
+  trucks.forEach(t=>drawTruck(t));
+  // Progress
+  const prog=trucks.reduce((s,t)=>s+t.prog(),0)/trucks.length;
+  const pct=Math.round(prog*100);
+  document.getElementById('gbFill').style.width=pct+'%';
+  document.getElementById('gbPct').textContent=pct+'%';
+}
+
+// ── Loop ──────────────────────────────────────────────────────────────────────
+function loop(){
+  animId=requestAnimationFrame(loop);
+  if(!playing)return;
+  frame++;
+  trucks.forEach(t=>t.advance(speed*1.3));
+  render();
+  if(frame%8===0)updateCards();
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+function init(){
+  setupCanvas();
+  resetRng();
+  problem=genProblem();
+  routes=buildRoutes(problem.depots,problem.customers);
+  routes.forEach(r=>{r.wps=makeWPs(r);r.totalD=Math.round(wpsLen(r.wps));});
+  trucks=routes.map((r,i)=>new Truck(r,r.wps,i*22));
+  totalDel=0;frame=0;
+  document.getElementById('logEl').innerHTML='';
+  document.getElementById('hDist').textContent='0';
+  document.getElementById('hDel').textContent='0/20';
+  document.getElementById('hTrucks').textContent=trucks.length;
+  addLog(`Ready: <b>${trucks.length} trucks</b>, 20 customers, 2 depots`,'#00d4b4');
+  addLog('Route: Greedy NN → 2-opt → Tabu Search','#5a7090');
+  updateCards();
+}
+
+function resetSim(){
+  if(animId){cancelAnimationFrame(animId);animId=null;}
+  if(problem)problem.customers.forEach(c=>c.visited=false);
+  init();playing=true;
+  document.getElementById('btnPlay').textContent='⏸ Pause';
+  document.getElementById('btnPlay').classList.add('on');
+  loop();
+}
+
+function togglePlay(){
+  playing=!playing;
+  const b=document.getElementById('btnPlay');
+  b.textContent=playing?'⏸ Pause':'▶ Play';
+  playing?b.classList.add('on'):b.classList.remove('on');
+}
+
+document.getElementById('spd').addEventListener('input',e=>{
+  speed=parseFloat(e.target.value);
+  document.getElementById('spdLbl').textContent=speed+'×';
+});
+
+window.addEventListener('resize',()=>{
+  if(animId){cancelAnimationFrame(animId);animId=null;}
+  resetSim();
+});
+
+// Start after layout is computed
+window.addEventListener('load',()=>setTimeout(()=>{init();loop();},120));
+</script>
+</body>
+</html>
