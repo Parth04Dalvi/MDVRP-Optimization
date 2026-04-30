@@ -176,7 +176,7 @@ Results are saved to `outputs/results_summary.csv`.
 
 ## References 
 1. S. Russell and P. Norvig, Artificial Intelligence: A Modern Approach, 4th ed. 
-Hoboken, NJ, USA: Pearson, 2020.  
+Hoboken, NJ, USA: Pearson, 2020.  \\
 2. G. Laporte, “The vehicle routing problem: An overview of exact and approximate 
 algorithms,” European Journal of Operational Research, vol. 59, no. 3, pp. 345–358, 
 1992.  
