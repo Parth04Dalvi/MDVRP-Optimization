@@ -5,6 +5,9 @@
 
 ---
 
+## Visualization of the truck route
+<img width="1916" height="921" alt="image" src="https://github.com/user-attachments/assets/45beab3d-5cf1-4818-b9d8-44f65a84cc16" />
+
 ## Overview
 
 A hybrid heuristic framework for the **Multi-Depot Vehicle Routing Problem (MDVRP)** combining three algorithms in a pipeline:
